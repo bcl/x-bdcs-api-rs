@@ -27,6 +27,7 @@ extern crate clap;
 extern crate bdcs;
 
 use clap::{Arg, App};
+use std::sync::{Arc, Mutex};
 
 // Database Connection Pooling
 use r2d2::{Pool, Config};
@@ -40,7 +41,8 @@ use bdcs::BDCSConfig;
 // API v0 functions
 use bdcs::api::enable_cors;
 use bdcs::api::v0::{unimplemented_v0, test_v0, compose_types_v0, dnf_info_packages_v0, project_list_v0, project_info_v0,
-                    recipe_list_v0, get_recipe_v0, post_recipe_v0, group_list_v0};
+                    recipe_list_v0, get_recipe_v0, post_recipe_v0, group_list_v0, compose_status_v0};
+use bdcs::api::v0::run_threads_bcl;
 
 /// Process Command Line Arguments and Serve the http API
 fn main() {
@@ -70,10 +72,13 @@ fn main() {
         host: matches.value_of("host").unwrap_or("127.0.0.1").to_string(),
         port: matches.value_of("port").unwrap_or("").parse().unwrap_or(4000),
         db_path: matches.value_of("DB").unwrap().to_string(),
-        recipe_path: matches.value_of("RECIPES").unwrap().to_string()
+        recipe_path: matches.value_of("RECIPES").unwrap().to_string(),
+        children: Vec::new(),
+        composing: false
+
     };
 
-    let mut server = Nickel::with_data(bdcs_config.clone());
+    let mut server = Nickel::with_data(Arc::new(Mutex::new(bdcs_config.clone())));
 
     // Use a pool of connections to the sqlite database
     let db_mgr = SqliteConnectionManager::new(&bdcs_config.db_path);
@@ -88,7 +93,7 @@ fn main() {
     // Composer v0 API
     server.get("/api/v0/isos", unimplemented_v0);
     server.post("/api/v0/compose", unimplemented_v0);
-    server.get("/api/v0/compose/status", unimplemented_v0);
+    server.get("/api/v0/compose/status", compose_status_v0);
     server.get("/api/v0/compose/status/:compose_id", unimplemented_v0);
     server.get("/api/v0/compose/types", compose_types_v0);
     server.get("/api/v0/compose/log/:kbytes", unimplemented_v0);
@@ -107,6 +112,8 @@ fn main() {
     server.get("/api/v0/recipe/list", recipe_list_v0);
     server.get("/api/v0/recipe/:names", get_recipe_v0);
     server.post("/api/v0/recipe/:name", post_recipe_v0);
+
+    server.get("/api/bcl/threads", run_threads_bcl);
 
     server.listen((bdcs_config.host.as_ref(), bdcs_config.port)).unwrap();
 }

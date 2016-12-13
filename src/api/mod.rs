@@ -91,6 +91,7 @@ pub mod v0;
 use config::BDCSConfig;
 use hyper::header;
 use nickel::{Request, Response, MiddlewareResult};
+use std::sync::{Arc, Mutex};
 
 /// Enable CORS support
 ///
@@ -114,7 +115,7 @@ use nickel::{Request, Response, MiddlewareResult};
 /// * Add the Access-Control-Allow-Credentials header -- it needs an actual domain for Origin in
 ///   order to work.
 ///
-pub fn enable_cors<'mw>(_req: &mut Request<BDCSConfig>, mut res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
+pub fn enable_cors<'mw>(_req: &mut Request<Arc<Mutex<BDCSConfig>>>, mut res: Response<'mw, Arc<Mutex<BDCSConfig>>>) -> MiddlewareResult<'mw, Arc<Mutex<BDCSConfig>>> {
     // Set appropriate headers
     res.set(header::AccessControlAllowOrigin::Any);
     res.set(header::AccessControlAllowHeaders(vec![

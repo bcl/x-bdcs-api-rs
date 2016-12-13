@@ -16,12 +16,15 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
-//! The `BDCSConfig` structure is used to pass configration data to the API handler methods from
-//! the `main()` function.
+
+/// The `BDCSConfig` structure is used to pass configration data to the API handler methods from
+/// the `main()` function.
 #[derive(Clone)]
 pub struct BDCSConfig {
     pub host: String,
     pub port: u16,
     pub db_path: String,
     pub recipe_path: String,
+    pub children: Vec<i8>,
+    pub composing: bool,
 }

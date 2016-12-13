@@ -35,6 +35,12 @@ use std::fs::File;
 use std::io::prelude::*;
 use toml;
 
+
+/// XXX-bcl
+use std::{thread, time};
+use std::process::Command;
+use std::sync::{Arc, Mutex};
+
 // bdcs database functions
 use db::{get_builds_name, get_build_files, get_projects_name, get_project_kv_project_id, get_builds_project_id,
         get_build_kv_build_id, get_source_id, get_source_kv_source_id, get_groups_name};
@@ -209,7 +215,7 @@ impl ToJson for Packages {
 ///
 /// * Change this to JSON and report the version number?
 ///
-pub fn test_v0<'mw>(_req: &mut Request<BDCSConfig>, res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
+pub fn test_v0<'mw>(_req: &mut Request<Arc<Mutex<BDCSConfig>>>, res: Response<'mw, Arc<Mutex<BDCSConfig>>>) -> MiddlewareResult<'mw, Arc<Mutex<BDCSConfig>>> {
    res.send("API v0 test")
 }
 
@@ -235,7 +241,7 @@ pub fn test_v0<'mw>(_req: &mut Request<BDCSConfig>, res: Response<'mw, BDCSConfi
 ///
 /// * Change it to a meaningful error code and JSON response
 ///
-pub fn unimplemented_v0<'mw>(_req: &mut Request<BDCSConfig>, res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
+pub fn unimplemented_v0<'mw>(_req: &mut Request<Arc<Mutex<BDCSConfig>>>, res: Response<'mw, Arc<Mutex<BDCSConfig>>>) -> MiddlewareResult<'mw, Arc<Mutex<BDCSConfig>>> {
    res.error(StatusCode::ImATeapot, "API Not Yet Implemented.")
 }
 
@@ -265,7 +271,7 @@ pub fn unimplemented_v0<'mw>(_req: &mut Request<BDCSConfig>, res: Response<'mw, 
 /// {"types":[{"enabled":true,"name":"iso"},{"enabled":false,"name":"disk-image"},{"enabled":false,"name":"fs-image"},{"enabled":false,"name":"ami"},{"enabled":false,"name":"tar"},{"enabled":false,"name":"live-pxe"},{"enabled":false,"name":"live-ostree"},{"enabled":false,"name":"oci"},{"enabled":false,"name":"vagrant"},{"enabled":false,"name":"qcow2"},{"enabled":false,"name":"vmdk"},{"enabled":false,"name":"vhdx"}]}
 /// ```
 ///
-pub fn compose_types_v0<'mw>(_req: &mut Request<BDCSConfig>, mut res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
+pub fn compose_types_v0<'mw>(_req: &mut Request<Arc<Mutex<BDCSConfig>>>, mut res: Response<'mw, Arc<Mutex<BDCSConfig>>>) -> MiddlewareResult<'mw, Arc<Mutex<BDCSConfig>>> {
     let mut types = Vec::new();
     types.push(ComposeTypes::new("iso", true));
     types.push(ComposeTypes::new("disk-image", false));
@@ -282,6 +288,41 @@ pub fn compose_types_v0<'mw>(_req: &mut Request<BDCSConfig>, mut res: Response<'
 
     let mut response: BTreeMap<String, json::Json> = BTreeMap::new();
     response.insert("types".to_string(), types.to_json());
+
+    res.set(MediaType::Json);
+    res.send(json::encode(&response).expect("Failed to serialize"))
+}
+
+
+/// Return the status of the compose thread
+///
+/// # Arguments
+///
+/// * `req` - Request from client
+/// * `res` - Response to be modified
+///
+/// # Returns
+///
+/// * A `MiddlewareResult`
+///
+/// # Response
+///
+/// * JSON response with compose.status set to true or false.
+///
+/// # Examples
+///
+/// ```json
+/// {"compose":{"status":true}}
+/// ```
+///
+pub fn compose_status_v0<'mw>(req: &mut Request<Arc<Mutex<BDCSConfig>>>, mut res: Response<'mw, Arc<Mutex<BDCSConfig>>>) -> MiddlewareResult<'mw, Arc<Mutex<BDCSConfig>>> {
+    let bdcs_config = req.server_data().lock().unwrap();
+
+    let mut status: BTreeMap<String, json::Json> = BTreeMap::new();
+    status.insert("status".to_string(), bdcs_config.composing.to_json());
+
+    let mut response: BTreeMap<String, json::Json> = BTreeMap::new();
+    response.insert("compose".to_string(), status.to_json());
 
     res.set(MediaType::Json);
     res.send(json::encode(&response).expect("Failed to serialize"))
@@ -315,7 +356,7 @@ pub fn compose_types_v0<'mw>(_req: &mut Request<BDCSConfig>, mut res: Response<'
 ///
 /// * Figure out how to package up all the details and output it as JSON
 ///
-pub fn dnf_info_packages_v0<'mw>(req: &mut Request<BDCSConfig>, res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
+pub fn dnf_info_packages_v0<'mw>(req: &mut Request<Arc<Mutex<BDCSConfig>>>, res: Response<'mw, Arc<Mutex<BDCSConfig>>>) -> MiddlewareResult<'mw, Arc<Mutex<BDCSConfig>>> {
     // Get the build details for NM
     let packages = req.param("packages").unwrap_or("").split(",");
 
@@ -389,7 +430,7 @@ pub fn dnf_info_packages_v0<'mw>(req: &mut Request<BDCSConfig>, res: Response<'m
 ///
 /// * Change the response to be {'projects': [ ... ]}
 ///
-pub fn project_list_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
+pub fn project_list_v0<'mw>(req: &mut Request<Arc<Mutex<BDCSConfig>>>, mut res: Response<'mw, Arc<Mutex<BDCSConfig>>>) -> MiddlewareResult<'mw, Arc<Mutex<BDCSConfig>>> {
     let offset: i64;
     let limit: i64;
     {
@@ -474,7 +515,7 @@ pub fn project_list_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw
 /// [{"builds":[{"arch":"x86_64","build_config_ref":"BUILD_CONFIG_REF","build_env_ref":"BUILD_ENV_REF","build_time":"2015-10-29T15:17:35","changelog":"- Ignore interfaces with invalid VLAN IDs. (dshea)\n  Resolves: rhbz#1274893","epoch":0,"license":"GPLv2+ and MIT","packageName":"anaconda","release":"1.el7","source_ref":"SOURCE_REF","version":"21.48.22.56"}],"description":"The anaconda package is a metapackage for the Anaconda installer.","homepage":"http://fedoraproject.org/wiki/Anaconda","name":"anaconda","summary":"Graphical system installer","upstream_vcs":"UPSTREAM_VCS"}]
 /// ```
 ///
-pub fn project_info_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
+pub fn project_info_v0<'mw>(req: &mut Request<Arc<Mutex<BDCSConfig>>>, mut res: Response<'mw, Arc<Mutex<BDCSConfig>>>) -> MiddlewareResult<'mw, Arc<Mutex<BDCSConfig>>> {
     let offset: i64;
     let limit: i64;
     {
@@ -614,8 +655,8 @@ pub fn project_info_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw
 /// {"recipes":["another","example","foo"]}
 /// ```
 ///
-pub fn recipe_list_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
-    let bdcs_config = req.server_data();
+pub fn recipe_list_v0<'mw>(req: &mut Request<Arc<Mutex<BDCSConfig>>>, mut res: Response<'mw, Arc<Mutex<BDCSConfig>>>) -> MiddlewareResult<'mw, Arc<Mutex<BDCSConfig>>> {
+    let bdcs_config = req.server_data().lock().unwrap();
     let recipe_path = bdcs_config.recipe_path.to_string() + "*";
 
     let offset: i64;
@@ -680,8 +721,8 @@ pub fn recipe_list_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw,
 /// {"example":{"description":"A stunning example","modules":[{"name":"fm-httpd","version":"23.*"},{"name":"fm-php","version":"11.6.*"}],"name":"example","packages":[{"name":"tmux","version":"2.2"}]}}
 /// ```
 ///
-pub fn get_recipe_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
-    let bdcs_config = req.server_data();
+pub fn get_recipe_v0<'mw>(req: &mut Request<Arc<Mutex<BDCSConfig>>>, mut res: Response<'mw, Arc<Mutex<BDCSConfig>>>) -> MiddlewareResult<'mw, Arc<Mutex<BDCSConfig>>> {
+    let bdcs_config = req.server_data().lock().unwrap();
 
     let offset: i64;
     let limit: i64;
@@ -768,8 +809,8 @@ pub fn get_recipe_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, 
 /// {"description":"A stunning example","modules":[{"name":"fm-httpd","version":"23.*"},{"name":"fm-php","version":"11.6.*"}],"name":"example","packages":[{"name":"tmux","version":"2.2"}]}
 /// ```
 ///
-pub fn post_recipe_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
-    let bdcs_config = req.server_data();
+pub fn post_recipe_v0<'mw>(req: &mut Request<Arc<Mutex<BDCSConfig>>>, mut res: Response<'mw, Arc<Mutex<BDCSConfig>>>) -> MiddlewareResult<'mw, Arc<Mutex<BDCSConfig>>> {
+    let bdcs_config = req.server_data().lock().unwrap();
 
     // Parse the JSON into Recipe structs (XXX Why does this work here, and not below req.param?)
     let recipe = match req.json_as::<Recipe>() {
@@ -850,7 +891,7 @@ pub fn post_recipe_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw,
 /// {"modules":[{"group_type":"rpm","name":"389-ds-base"},{"group_type":"rpm","name":"389-ds-base-libs"},{"group_type":"rpm","name":"ElectricFence"},{"group_type":"rpm","name":"ElectricFence"},{"group_type":"rpm","name":"GConf2"},{"group_type":"rpm","name":"GConf2"},{"group_type":"rpm","name":"GeoIP"},{"group_type":"rpm","name":"GeoIP"},{"group_type":"rpm","name":"ImageMagick"},{"group_type":"rpm","name":"ImageMagick"},{"group_type":"rpm","name":"ImageMagick-c++"},{"group_type":"rpm","name":"ImageMagick-c++"},{"group_type":"rpm","name":"ImageMagick-perl"},{"group_type":"rpm","name":"LibRaw"},{"group_type":"rpm","name":"LibRaw"},{"group_type":"rpm","name":"ModemManager"},{"group_type":"rpm","name":"ModemManager-glib"},{"group_type":"rpm","name":"ModemManager-glib"},{"group_type":"rpm","name":"MySQL-python"},{"group_type":"rpm","name":"NetworkManager"}]}
 /// ```
 ///
-pub fn group_list_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
+pub fn group_list_v0<'mw>(req: &mut Request<Arc<Mutex<BDCSConfig>>>, mut res: Response<'mw, Arc<Mutex<BDCSConfig>>>) -> MiddlewareResult<'mw, Arc<Mutex<BDCSConfig>>> {
     let offset: i64;
     let limit: i64;
     {
@@ -903,3 +944,51 @@ pub fn group_list_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, 
     }
     res.send(json::encode(&response).expect("Failed to serialize"))
 }
+
+
+/// Threading experiments
+pub fn run_threads_bcl<'mw>(req: &mut Request<Arc<Mutex<BDCSConfig>>>, mut res: Response<'mw, Arc<Mutex<BDCSConfig>>>) -> MiddlewareResult<'mw, Arc<Mutex<BDCSConfig>>> {
+    println!("Starting a thread for 5 seconds.");
+
+    // Start a long running thread
+    let conn = req.db_conn().expect("Failed to get a database connection from the pool.");
+    {
+        // Update the shared compose status bool
+        let mut bdcs_config = req.server_data().lock().unwrap();
+        bdcs_config.composing = true;
+    }
+
+    // This increments the Arc counter on the BDCSConfig and makes it possible to move it to the
+    // new thread.
+    let server_data = req.server_data().clone();
+    let child = thread::spawn(move || {
+        // sleep for a while
+        let delay = time::Duration::from_secs(5);
+        thread::sleep(delay);
+        let result = get_projects_name(&conn, "*", 0, 50);
+        println!("{:?}", result);
+
+        let output = Command::new("rsync")
+            .arg("--help")
+            .output().unwrap_or_else(|e| {
+                panic!("Failed to run rsync: {}", e)
+            });
+
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout);
+            println!("stdout:\n{}", s);
+        } else {
+            let s = String::from_utf8_lossy(&output.stderr);
+            println!("stderr:\n{}", s);
+        }
+
+        println!("Thread is done!");
+
+        // Get access to the BDCSConfig and clear the flag.
+        let mut bdcs_config = server_data.lock().unwrap();
+        bdcs_config.composing = false;
+    });
+
+    res.send("Thread Started...")
+}
+
