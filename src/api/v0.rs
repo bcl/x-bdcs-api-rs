@@ -22,15 +22,18 @@
 //!  * Handle Authentication, similar to the [example here.](https://auth0.com/blog/build-an-api-in-rust-with-jwt-authentication-using-nickelrs/)
 //!
 use config::BDCSConfig;
+use crypto::sha2::Sha256;
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use glob::glob;
-use hyper::header::{self, qitem};
+use hyper::header::{self, qitem, Authorization, Bearer};
+use jwt::{Header, Registered, Token};
 use nickel::{MediaType, Request, Response, MiddlewareResult, QueryString, JsonBody};
 use nickel::status::StatusCode;
 use nickel_sqlite::SqliteRequestExtensions;
 use rustc_serialize::json::{self, ToJson, Json};
 use std::collections::BTreeMap;
+use std::default::Default;
 use std::fs::File;
 use std::io::prelude::*;
 use toml;
@@ -188,6 +191,18 @@ impl ToJson for Packages {
         Json::Object(d)
     }
 }
+
+
+/// JSON From /users/login
+#[derive(RustcDecodable, RustcEncodable)]
+struct UserLogin {
+    email: String,
+    password: String
+}
+
+
+// TODO Should come from a config file
+static AUTH_SECRET: &'static str = "Earn_more_sessions_by_sleeving";
 
 
 /// Test the connection to the API
@@ -902,4 +917,54 @@ pub fn group_list_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, 
         None => ()
     }
     res.send(json::encode(&response).expect("Failed to serialize"))
+}
+
+
+/// User Login
+///
+/// # Arguments
+///
+/// * `req` - Request from the client
+/// * `res` - Response to be modified
+///
+/// # Returns
+///
+/// * A `MiddlewareResult`
+///
+/// # Request
+///
+/// * `email`
+/// * `password`
+///
+/// # Response
+///
+/// * JSON response with `jwt` set to the signed token.
+///
+pub fn users_login_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
+    let user = req.json_as::<UserLogin>().unwrap();
+
+    let email = user.email.to_string();
+    let password = user.password.to_string();
+    println!("Logging in - {}:{}", email, password);
+
+    if email == "test".to_string() && password == "test".to_string() {
+        let header: Header = Default::default();
+        // XXX TODO EXAMPLE ONLY
+        let claims = Registered {
+            sub: Some(email.into()),
+            ..Default::default()
+        };
+        let token = Token::new(header, claims);
+        let jwt = token.signed(AUTH_SECRET.as_bytes(), Sha256::new()).unwrap();
+
+        let mut login: BTreeMap<String, json::Json> = BTreeMap::new();
+        login.insert("jwt".to_string(), jwt.to_json());
+
+        let mut response: BTreeMap<String, json::Json> = BTreeMap::new();
+        response.insert("users".to_string(), login.to_json());
+
+        res.send(json::encode(&response).expect("Failed to serialize"))
+    } else {
+        res.error(StatusCode::Forbidden, "Incorrect Login Credentials")
+    }
 }

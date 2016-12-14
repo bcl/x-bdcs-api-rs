@@ -24,9 +24,11 @@
 //! struct which is used to pass configuration data to the API handlers.
 //!
 
+extern crate crypto;
 extern crate flate2;
 extern crate glob;
 extern crate hyper;
+extern crate jwt;
 #[macro_use] extern crate nickel;
 extern crate nickel_sqlite;
 extern crate rusqlite;
