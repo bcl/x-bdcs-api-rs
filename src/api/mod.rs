@@ -89,8 +89,14 @@ pub mod v0;
 
 
 use config::BDCSConfig;
-use hyper::header;
+use crypto::sha2::Sha256;
+use hyper::header::{self, Authorization, Bearer};
+use jwt::{Header, Registered, Token};
 use nickel::{Request, Response, MiddlewareResult};
+use nickel::status::StatusCode;
+
+// TODO Should come from a config file
+static AUTH_SECRET: &'static str = "Earn_more_sessions_by_sleeving";
 
 /// Enable CORS support
 ///
@@ -129,4 +135,62 @@ pub fn enable_cors<'mw>(_req: &mut Request<BDCSConfig>, mut res: Response<'mw, B
 
     // Pass control to the next middleware
     res.next_middleware()
+}
+
+
+/// JWT Authentication support
+///
+/// # Arguments
+///
+/// * `_req` - Unused Request structure
+/// * `res` - Response to me modified
+///
+/// # Returns
+///
+/// * A `MiddlewareResult` or Forbidden
+///
+/// # Panics
+///
+/// * It will panic if no authorization header is found.
+///
+/// The authentication is not checked for OPTIONS requests, nor for /users/login requests.
+///
+pub fn jwt_auth<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
+    if req.origin.method.to_string() == "OPTIONS".to_string() {
+        // The middleware should not be used for OPTIONS, so continue
+        res.next_middleware()
+    } else if req.origin.uri.to_string().ends_with("/users/login") {
+        // We do not want to apply the middleware to the login route
+        res.next_middleware()
+    } else {
+        // Get the full Authorization header from the incoming request headers
+        let auth_header = match req.origin.headers.get::<Authorization<Bearer>>() {
+            Some(header) => header,
+            None => {
+                // TODO Return a proper error to the client
+                panic!("No authorization header found")
+            }
+        };
+
+        // Format the header to only take the value
+        let jwt = header::HeaderFormatter(auth_header).to_string();
+
+        // We don't need the Bearer part,
+        // so get whatever is after an index of 7
+        let jwt_slice = &jwt[7..];
+
+        // Parse the token
+        let token = Token::<Header, Registered>::parse(jwt_slice).unwrap();
+
+        // Get the secret key as bytes
+        let secret = AUTH_SECRET.as_bytes();
+
+        // Verify the token
+        if token.verify(&secret, Sha256::new()) {
+            // TODO Add user details to req someplace? Verify it against the db? Check expiration?
+            res.next_middleware()
+        } else {
+            res.error(StatusCode::Forbidden, "Access denied")
+        }
+    }
 }

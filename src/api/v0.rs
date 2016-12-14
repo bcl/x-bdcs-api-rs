@@ -963,6 +963,8 @@ pub fn users_login_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw,
         let mut response: BTreeMap<String, json::Json> = BTreeMap::new();
         response.insert("users".to_string(), login.to_json());
 
+        // XXX Does this need to be application/jwt? How does the client process it?
+        res.set(MediaType::Json);
         res.send(json::encode(&response).expect("Failed to serialize"))
     } else {
         res.error(StatusCode::Forbidden, "Incorrect Login Credentials")

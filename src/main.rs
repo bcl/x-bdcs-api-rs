@@ -38,7 +38,7 @@ use nickel::{Nickel, HttpRouter};
 
 use bdcs::BDCSConfig;
 // API v0 functions
-use bdcs::api::enable_cors;
+use bdcs::api::{enable_cors, jwt_auth};
 use bdcs::api::v0::{unimplemented_v0, test_v0, compose_types_v0, dnf_info_packages_v0, project_list_v0, project_info_v0,
                     recipe_list_v0, get_recipe_v0, post_recipe_v0, group_list_v0, users_login_v0};
 
@@ -82,6 +82,7 @@ fn main() {
     server.utilize(SqliteMiddleware::with_pool(db_pool));
 
     server.utilize(enable_cors);
+    server.utilize(jwt_auth);
 
     server.get("/api/v0/test", test_v0);
 
