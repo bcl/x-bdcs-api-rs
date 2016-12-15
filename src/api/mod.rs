@@ -88,9 +88,10 @@
 pub mod v0;
 
 
+use base64::decode;
 use config::BDCSConfig;
 use crypto::sha2::Sha256;
-use hyper::header::{self, Authorization, Bearer};
+use hyper::header::{self, Authorization, Basic, Bearer};
 use jwt::{Header, Registered, Token};
 use nickel::{Request, Response, MiddlewareResult};
 use nickel::status::StatusCode;
@@ -163,24 +164,32 @@ pub fn jwt_auth<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, BDCSC
         // We do not want to apply the middleware to the login route
         res.next_middleware()
     } else {
+        let jwt_token: String;
+
         // Get the full Authorization header from the incoming request headers
-        let auth_header = match req.origin.headers.get::<Authorization<Bearer>>() {
-            Some(header) => header,
-            None => {
+        if let Some(header) = req.origin.headers.get::<Authorization<Bearer>>() {
+            let jwt = header::HeaderFormatter(header).to_string();
+            jwt_token = jwt[7..].to_string();
+        } else {
+            if let Some(header) = req.origin.headers.get::<Authorization<Basic>>() {
+                let jwt = header::HeaderFormatter(header).to_string();
+                // The Basic auth has : and possibly a password. Split it and ignore password
+                let jwt_bytes = decode(&jwt[6..]).unwrap();
+                jwt_token = String::from_utf8(jwt_bytes)
+                    .unwrap()
+                    .rsplitn(2, ":")
+                    .last()
+                    .unwrap()
+                    .to_string();
+            } else {
                 // TODO Return a proper error to the client
                 panic!("No authorization header found")
             }
-        };
-
-        // Format the header to only take the value
-        let jwt = header::HeaderFormatter(auth_header).to_string();
-
-        // We don't need the Bearer part,
-        // so get whatever is after an index of 7
-        let jwt_slice = &jwt[7..];
+        }
 
         // Parse the token
-        let token = Token::<Header, Registered>::parse(jwt_slice).unwrap();
+        println!("{:?}", jwt_token);
+        let token = Token::<Header, Registered>::parse(&jwt_token).unwrap();
 
         // Get the secret key as bytes
         let secret = AUTH_SECRET.as_bytes();

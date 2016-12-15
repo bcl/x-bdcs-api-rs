@@ -24,6 +24,7 @@
 //! struct which is used to pass configuration data to the API handlers.
 //!
 
+extern crate base64;
 extern crate crypto;
 extern crate flate2;
 extern crate glob;
