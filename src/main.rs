@@ -23,10 +23,17 @@ extern crate nickel_sqlite;
 extern crate r2d2;
 extern crate r2d2_sqlite;
 extern crate clap;
+#[macro_use] extern crate slog;
+extern crate slog_json;
+#[macro_use] extern crate slog_scope;
+extern crate slog_stream;
+extern crate slog_term;
 
 extern crate bdcs;
 
 use clap::{Arg, App};
+use slog::DrainExt;
+use std::fs::OpenOptions;
 
 // Database Connection Pooling
 use r2d2::{Pool, Config};
@@ -38,7 +45,7 @@ use nickel::{Nickel, HttpRouter};
 
 use bdcs::BDCSConfig;
 // API v0 functions
-use bdcs::api::enable_cors;
+use bdcs::api::{enable_cors, Logger};
 use bdcs::api::v0::{unimplemented_v0, test_v0, compose_types_v0, dnf_info_packages_v0, project_list_v0, project_info_v0,
                     recipe_list_v0, get_recipe_v0, post_recipe_v0, group_list_v0};
 
@@ -56,6 +63,11 @@ fn main() {
                                         .value_name("PORT")
                                         .help("Port to bind to (4000)")
                                         .takes_value(true))
+                            .arg(Arg::with_name("log")
+                                        .long("log")
+                                        .value_name("LOGFILE")
+                                        .help("Path to JSON  logfile")
+                                        .takes_value(true))
                             .arg(Arg::with_name("DB")
                                         .help("Path to the BDCS sqlite database")
                                         .required(true)
@@ -66,12 +78,26 @@ fn main() {
                                         .index(2))
                         .get_matches();
 
+    // Setup logging
+    let log_path = matches.value_of("log").unwrap_or("/var/log/bdcs-api.log").to_string();
+    let term_drain = slog_term::streamer().build();
+    let log_file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(log_path).expect("Error opening logfile for writing.");
+    let file_drain = slog_stream::stream(log_file, slog_json::default());
+    let log = slog::Logger::root(slog::duplicate(term_drain, file_drain).fuse(), o!());
+    slog_scope::set_global_logger(log);
+    // TODO How to update this version from Cargo.toml at build time?
+    info!("BDCS API v0.1.0 started");
+
     let bdcs_config = BDCSConfig {
         host: matches.value_of("host").unwrap_or("127.0.0.1").to_string(),
         port: matches.value_of("port").unwrap_or("").parse().unwrap_or(4000),
         db_path: matches.value_of("DB").unwrap().to_string(),
         recipe_path: matches.value_of("RECIPES").unwrap().to_string()
     };
+    info!("BDCS Configuration"; "bdcs_config" => format!("{:?}", bdcs_config));
 
     let mut server = Nickel::with_data(bdcs_config.clone());
 
@@ -81,6 +107,7 @@ fn main() {
         .expect("Unable to initialize the connection pool.");
     server.utilize(SqliteMiddleware::with_pool(db_pool));
 
+    server.utilize(Logger);
     server.utilize(enable_cors);
 
     server.get("/api/v0/test", test_v0);

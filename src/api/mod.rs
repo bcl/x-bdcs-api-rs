@@ -90,7 +90,7 @@ pub mod v0;
 
 use config::BDCSConfig;
 use hyper::header;
-use nickel::{Request, Response, MiddlewareResult};
+use nickel::{Request, Response, Middleware, MiddlewareResult, QueryString};
 
 /// Enable CORS support
 ///
@@ -129,4 +129,22 @@ pub fn enable_cors<'mw>(_req: &mut Request<BDCSConfig>, mut res: Response<'mw, B
 
     // Pass control to the next middleware
     res.next_middleware()
+}
+
+
+/// Logger middleware
+///
+/// Add this to nickel.rs using server.utilize(Logger) and it will log details about API
+/// requests including the query string, parameters, url requested, and client IP.
+///
+pub struct Logger;
+
+impl<D> Middleware<D> for Logger {
+    fn invoke<'mw, 'conn>(&self, req: &mut Request<'mw, 'conn, D>, res: Response<'mw, D>)
+    -> MiddlewareResult<'mw, D> {
+        info!("API request";
+              "uri" => format!("{:?}", &req.path_without_query().unwrap()),
+              "query" => format!("{:?}", &req.query()) );
+        res.next_middleware()
+    }
 }

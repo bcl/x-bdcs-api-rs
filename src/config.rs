@@ -18,7 +18,7 @@
 //
 //! The `BDCSConfig` structure is used to pass configration data to the API handler methods from
 //! the `main()` function.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BDCSConfig {
     pub host: String,
     pub port: u16,

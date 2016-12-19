@@ -31,6 +31,8 @@ extern crate hyper;
 extern crate nickel_sqlite;
 extern crate rusqlite;
 extern crate rustc_serialize;
+#[macro_use] extern crate slog;
+#[macro_use] extern crate slog_scope;
 extern crate toml;
 
 pub mod api;
