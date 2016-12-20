@@ -109,6 +109,50 @@ struct Packages {
     version: Option<String>
 }
 
+
+/// Project Information
+///
+/// These are used to represent detailed project information, including
+/// all metadata K:V pairs, builds and source info.
+#[derive(Debug,RustcEncodable)]
+struct ProjectInfo {
+    name: String,
+    summary: String,
+    description: String,
+    homepage: Option<String>,
+    upstream_vcs: String,
+    metadata: Option<HashMap<String, String>>,
+    builds: Option<Vec<BuildInfo>>,
+}
+
+#[derive(Debug,RustcEncodable)]
+struct BuildInfo {
+    epoch: i64,
+    release: String,
+    arch: String,
+    build_time: String,
+    changelog: String,
+    build_config_ref: String,
+    build_env_ref: String,
+    metadata: Option<HashMap<String, String>>,
+    source: Option<SourceInfo>,
+}
+
+#[derive(Debug,RustcEncodable)]
+struct SourceInfo {
+    license: String,
+    version: String,
+    source_ref: String,
+    metadata: Option<HashMap<String, String>>
+}
+
+#[derive(Debug,RustcEncodable)]
+struct ProjectsResult {
+    projects: Vec<ProjectInfo>,
+    offset:   i64,
+    limit:    i64
+}
+
 /// Test the connection to the API
 ///
 /// # Arguments
@@ -324,16 +368,29 @@ pub fn project_list_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw
         Ok(projs) => {
             // SQL query could potentially return more than one, so loop.
             for p in projs {
-                project_list.push(p);
+                project_list.push(ProjectInfo {
+                                        name:         p.name,
+                                        summary:      p.summary,
+                                        description:  p.description,
+                                        homepage:     p.homepage,
+                                        upstream_vcs: p.upstream_vcs,
+                                        metadata:     None,
+                                        builds:       None
+                                        });
             }
         }
         Err(err) => println!("Error: {}", err)
     }
 
-    res.set(MediaType::Json);
-
+    // TODO Make this a helper function for API calls
+    let result = ProjectsResult {
+                    projects: project_list,
+                    offset:   offset,
+                    limit:    limit
+    };
 
     // TODO Make this some kind of middleware thing
+    res.set(MediaType::Json);
     match req.origin.headers.get::<header::AcceptEncoding>() {
         Some(header) => {
             if header.contains(&qitem(header::Encoding::Gzip)) {
@@ -341,13 +398,13 @@ pub fn project_list_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw
                 res.set(header::ContentEncoding(vec![header::Encoding::Gzip]));
 
                 let mut encoder = GzEncoder::new(Vec::new(), Compression::Default);
-                let _ = encoder.write(json::encode(&project_list).expect("Failed to serialize").as_bytes());
+                let _ = encoder.write(json::encode(&result).expect("Failed to serialize").as_bytes());
                 return res.send(encoder.finish().unwrap());
             }
         }
         None => ()
     }
-    res.send(json::encode(&project_list).expect("Failed to serialize"))
+    res.send(json::encode(&result).expect("Failed to serialize"))
 }
 
 
@@ -387,7 +444,7 @@ pub fn project_list_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw
 /// # Examples
 ///
 /// ```json
-/// [{"builds":[{"arch":"x86_64","build_config_ref":"BUILD_CONFIG_REF","build_env_ref":"BUILD_ENV_REF","build_time":"2015-10-29T15:17:35","changelog":"- Ignore interfaces with invalid VLAN IDs. (dshea)\n  Resolves: rhbz#1274893","epoch":0,"license":"GPLv2+ and MIT","packageName":"anaconda","release":"1.el7","source_ref":"SOURCE_REF","version":"21.48.22.56"}],"description":"The anaconda package is a metapackage for the Anaconda installer.","homepage":"http://fedoraproject.org/wiki/Anaconda","name":"anaconda","summary":"Graphical system installer","upstream_vcs":"UPSTREAM_VCS"}]
+/// {"projects":[{"name":"lorax","summary":"Tool for creating the anaconda install images","description":"Lorax is a tool for creating the anaconda install images.\n\nIt also includes livemedia-creator which is used to create bootable livemedia,\nincluding live isos and disk images. It can use libvirtd for the install, or\nAnaconda's image install feature.","homepage":"http://git.fedorahosted.org/git/?p=lorax.git","upstream_vcs":"UPSTREAM_VCS","metadata":{},"builds":[{"epoch":0,"release":"1.el7","arch":"x86_64","build_time":"2016-09-08T19:25:20","changelog":"- Don't log dracut initrd regeneration messages into /tmp/syslog (rvykydal)\n  Related: rhbz#1369439\n- Use imjournal for rsyslogd instead of sharing /dev/log with journal (rvykydal)\n  Resolves: rhbz#1369439","build_config_ref":"BUILD_CONFIG_REF","build_env_ref":"BUILD_ENV_REF","metadata":{"packageName":"lorax"},"source":{"license":"GPLv2+","version":"19.6.78","source_ref":"SOURCE_REF","metadata":{}}}]}],"offset":0,"limit":20}
 /// ```
 ///
 pub fn project_info_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
@@ -404,99 +461,124 @@ pub fn project_info_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw
     // fail?
 
     let conn = req.db_conn().expect("Failed to get a database connection from the pool.");
-    let mut project_info = Vec::new();
+    let mut project_list = Vec::new();
     for proj in projects {
         let result = get_projects_name(&conn, proj, offset, limit);
         match result {
             Ok(projs) => {
                 // SQL query could potentially return more than one, so loop.
                 for p in projs {
-                    let mut proj_map = HashMap::new();
-                    proj_map.insert("name".to_string(), p.name.to_json());
-                    proj_map.insert("summary".to_string(), p.summary.to_json());
-                    proj_map.insert("description".to_string(), p.description.to_json());
-                    proj_map.insert("homepage".to_string(), p.homepage.unwrap_or("".to_string()).to_json());
-                    proj_map.insert("upstream_vcs".to_string(), p.upstream_vcs.to_json());
+                    // Get the build and source details first
+                    let mut build_list = Vec::new();
+                    let build_results = get_builds_project_id(&conn, p.id);
+                    match build_results {
+                        Ok(builds) => {
+                            for b in builds {
+                                let mut source_metadata: HashMap<String, String> = HashMap::new();
+                                let result = get_source_kv_source_id(&conn, b.source_id);
+                                match result {
+                                    Ok(kvs) => {
+                                        for kv in kvs {
+                                            source_metadata.entry(kv.key_value).or_insert(kv.val_value);
+                                        }
+                                    }
+                                    Err(err) => println!("Error: {}", err)
+                                }
 
-                    // Add the project's key:value mappings
+                                let mut source_info: Option<SourceInfo> = None;
+                                let result = get_source_id(&conn, b.source_id);
+                                match result {
+                                    // FIXME Only one possible result, not a Vec
+                                    Ok(sources) => {
+                                        for s in sources {
+                                            source_info = Some(SourceInfo {
+                                                                license: s.license,
+                                                                version: s.version,
+                                                                source_ref: s.source_ref,
+                                                                metadata: Some(source_metadata)
+                                            });
+                                            break;
+                                        }
+                                    }
+                                    Err(err) => println!("Error: {}", err)
+                                }
+
+                                let mut build_metadata: HashMap<String, String> = HashMap::new();
+                                let result = get_build_kv_build_id(&conn, b.id);
+                                match result {
+                                    Ok(kvs) => {
+                                        for kv in kvs {
+                                            build_metadata.entry(kv.key_value).or_insert(kv.val_value);
+                                        }
+                                    }
+                                    Err(err) => println!("Error: {}", err)
+                                }
+
+                                build_list.push(BuildInfo {
+                                                    epoch:            b.epoch,
+                                                    release:          b.release,
+                                                    arch:             b.arch,
+                                                    build_time:       b.build_time,
+                                                    changelog:        String::from_utf8(b.changelog).unwrap_or("".to_string()),
+                                                    build_config_ref: b.build_config_ref,
+                                                    build_env_ref:    b.build_env_ref,
+                                                    metadata:         Some(build_metadata),
+                                                    source:           source_info
+                                });
+                            }
+                        }
+                        Err(err) => println!("Error: {}", err)
+                    }
+
+                    let mut proj_metadata: HashMap<String, String> = HashMap::new();
                     let result_2 = get_project_kv_project_id(&conn, p.id);
                     match result_2 {
                         Ok(kvs) => {
                             for kv in kvs {
-                                proj_map.entry(kv.key_value.to_string()).or_insert(kv.val_value.to_json());
+                                proj_metadata.entry(kv.key_value).or_insert(kv.val_value);
                             }
                         }
                         Err(err) => println!("Error: {}", err)
                     }
 
-
-                    let mut builds_list = Vec::new();
-                    let result_3 = get_builds_project_id(&conn, p.id);
-                    match result_3 {
-                        Ok(builds) => {
-                            for b in builds {
-                                let mut build_map = HashMap::new();
-                                build_map.insert("epoch".to_string(), b.epoch.to_json());
-                                build_map.insert("release".to_string(), b.release.to_json());
-                                build_map.insert("arch".to_string(), b.arch.to_json());
-                                build_map.insert("build_time".to_string(), b.build_time.to_json());
-
-                                // changelog is a Vec[u8] so convert it to a String
-                                let s = String::from_utf8(b.changelog).unwrap_or("".to_string());
-                                build_map.insert("changelog".to_string(), s.to_json());
-
-                                build_map.insert("build_config_ref".to_string(), b.build_config_ref.to_json());
-                                build_map.insert("build_env_ref".to_string(), b.build_env_ref.to_json());
-
-                                let result_4 = get_build_kv_build_id(&conn, b.id);
-                                match result_4 {
-                                    Ok(kvs) => {
-                                        for kv in kvs {
-                                            build_map.entry(kv.key_value.to_string()).or_insert(kv.val_value.to_json());
-                                        }
-                                    }
-                                    Err(err) => println!("Error: {}", err)
-                                }
-
-                                let result_5 = get_source_id(&conn, b.source_id);
-                                match result_5 {
-                                    // FIXME Only one possible result, not a Vec
-                                    Ok(sources) => {
-                                        for s in sources {
-                                            build_map.insert("license".to_string(), s.license.to_json());
-                                            build_map.insert("version".to_string(), s.version.to_json());
-                                            build_map.insert("source_ref".to_string(), s.source_ref.to_json());
-                                        }
-                                    }
-                                    Err(err) => println!("Error: {}", err)
-                                }
-
-                                let result_6 = get_source_kv_source_id(&conn, b.source_id);
-                                match result_6 {
-                                    Ok(kvs) => {
-                                        for kv in kvs {
-                                            build_map.entry(kv.key_value.to_string()).or_insert(kv.val_value.to_json());
-                                        }
-                                    }
-                                    Err(err) => println!("Error: {}", err)
-                                }
-
-
-                                builds_list.push(build_map);
-                            }
-                        }
-                        Err(err) => println!("Error: {}", err)
-                    }
-                    proj_map.insert("builds".to_string(), builds_list.to_json());
-                    project_info.push(proj_map);
+                    project_list.push(ProjectInfo {
+                                            name:         p.name,
+                                            summary:      p.summary,
+                                            description:  p.description,
+                                            homepage:     p.homepage,
+                                            upstream_vcs: p.upstream_vcs,
+                                            metadata:     Some(proj_metadata),
+                                            builds:       Some(build_list)
+                    });
                 }
             }
             Err(err) => println!("Error: {}", err)
         }
     }
 
+    // TODO Make this a helper function for API calls
+    let result = ProjectsResult {
+                    projects: project_list,
+                    offset:   offset,
+                    limit:    limit
+    };
+
+    // TODO Make this some kind of middleware thing
     res.set(MediaType::Json);
-    res.send(json::encode(&project_info).expect("Failed to serialize"))
+    match req.origin.headers.get::<header::AcceptEncoding>() {
+        Some(header) => {
+            if header.contains(&qitem(header::Encoding::Gzip)) {
+                // Client accepts gzip, go ahead and compress it
+                res.set(header::ContentEncoding(vec![header::Encoding::Gzip]));
+
+                let mut encoder = GzEncoder::new(Vec::new(), Compression::Default);
+                let _ = encoder.write(json::encode(&result).expect("Failed to serialize").as_bytes());
+                return res.send(encoder.finish().unwrap());
+            }
+        }
+        None => ()
+    }
+    res.send(json::encode(&result).expect("Failed to serialize"))
 }
 
 
