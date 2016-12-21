@@ -29,6 +29,7 @@ use hyper::header::{self, qitem};
 use nickel::{MediaType, Request, Response, MiddlewareResult, QueryString, JsonBody};
 use nickel::status::StatusCode;
 use nickel_sqlite::SqliteRequestExtensions;
+use rusqlite::Error;
 use rustc_serialize::json::{self, ToJson, Json};
 use std::collections::HashMap;
 use std::fs::File;
@@ -36,7 +37,7 @@ use std::io::prelude::*;
 use toml;
 
 // bdcs database functions
-use db::{get_builds_name, get_build_files, get_projects_name, get_project_kv_project_id, get_builds_project_id,
+use db::{self, get_builds_name, get_build_files, get_projects_name, get_project_kv_project_id, get_builds_project_id,
         get_build_kv_build_id, get_source_id, get_source_kv_source_id, get_groups_name};
 
 
@@ -148,10 +149,20 @@ struct SourceInfo {
 
 #[derive(Debug,RustcEncodable)]
 struct ProjectsResult {
-    projects: Vec<ProjectInfo>,
-    offset:   i64,
-    limit:    i64
+    projects: Option<Vec<ProjectInfo>>,
+    offset:   Option<i64>,
+    limit:    Option<i64>,
+    id:       Option<ErrorId>,
+    msg:      Option<String>,
 }
+
+// TODO Do something useful with this
+#[derive(Debug,RustcEncodable)]
+enum ErrorId {
+    Basic,
+    Complicated
+}
+
 
 /// Test the connection to the API
 ///
@@ -352,6 +363,39 @@ pub fn dnf_info_packages_v0<'mw>(req: &mut Request<BDCSConfig>, res: Response<'m
 ///
 /// * Change the response to be {'projects': [ ... ]}
 ///
+fn project_result(projs: Vec<db::Projects>, offset: i64, limit: i64) -> Result<ProjectsResult, Error> {
+    let mut project_list = Vec::new();
+    for p in projs {
+        project_list.push(ProjectInfo {
+                            name:         p.name,
+                            summary:      p.summary,
+                            description:  p.description,
+                            homepage:     p.homepage,
+                            upstream_vcs: p.upstream_vcs,
+                            metadata:     None,
+                            builds:       None
+                        });
+    }
+
+    Ok(ProjectsResult {
+           projects: Some(project_list),
+           offset:   Some(offset),
+           limit:    Some(limit),
+           id:       None,
+           msg:      None
+    })
+}
+
+fn error_result(err: Error, offset: i64, limit: i64) -> Result<ProjectsResult, Error> {
+    Ok(ProjectsResult {
+           id:       Some(ErrorId::Basic),
+           msg:      Some(format!("Some kind of error: {:?}", err)),
+           offset:   Some(offset),
+           limit:    Some(limit),
+           projects: None
+    })
+}
+
 pub fn project_list_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw, BDCSConfig>) -> MiddlewareResult<'mw, BDCSConfig> {
     let offset: i64;
     let limit: i64;
@@ -362,32 +406,10 @@ pub fn project_list_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw
     }
 
     let conn = req.db_conn().expect("Failed to get a database connection from the pool.");
-    let mut project_list = Vec::new();
-    let result = get_projects_name(&conn, "*", offset, limit);
-    match result {
-        Ok(projs) => {
-            // SQL query could potentially return more than one, so loop.
-            for p in projs {
-                project_list.push(ProjectInfo {
-                                        name:         p.name,
-                                        summary:      p.summary,
-                                        description:  p.description,
-                                        homepage:     p.homepage,
-                                        upstream_vcs: p.upstream_vcs,
-                                        metadata:     None,
-                                        builds:       None
-                                        });
-            }
-        }
-        Err(err) => println!("Error: {}", err)
-    }
-
-    // TODO Make this a helper function for API calls
-    let result = ProjectsResult {
-                    projects: project_list,
-                    offset:   offset,
-                    limit:    limit
-    };
+    let result = get_projects_name(&conn, "*", offset, limit)
+                    .and_then(|projs| project_result(projs, offset, limit))
+                    .or_else(|projs| error_result(projs, offset, limit))
+                    .unwrap();
 
     // TODO Make this some kind of middleware thing
     res.set(MediaType::Json);
@@ -558,9 +580,11 @@ pub fn project_info_v0<'mw>(req: &mut Request<BDCSConfig>, mut res: Response<'mw
 
     // TODO Make this a helper function for API calls
     let result = ProjectsResult {
-                    projects: project_list,
-                    offset:   offset,
-                    limit:    limit
+                    projects: Some(project_list),
+                    offset:   Some(offset),
+                    limit:    Some(limit),
+                    id:       None,
+                    msg:      None
     };
 
     // TODO Make this some kind of middleware thing
